@@ -1,0 +1,372 @@
+---
+title: "stock"
+output: html_notebook
+---
+
+```{r}
+library(data.table)
+library(ggplot2)
+url <- 'http://www.asx.com.au/asx/research/ASXListedCompanies.csv'
+asx.symbols <- data.table(read.csv(url, skip = 2))
+head(asx.symbols)
+count = asx.symbols[,.N, by=.(GICS.industry.group)] 
+
+ggplot(count, aes(x = reorder(GICS.industry.group, N), N, label = N)) + 
+  geom_text(hjust = - 0.1, size = 3)+
+  geom_col()+
+  coord_flip() +
+  labs(x = 'ASX Industry', title = 'ASX Industries Distribution')
+  
+```
+
+
+
+```{r}
+library(quantmod)
+library(grid)
+colnames(asx.symbols) = c('company', 'ASX', 'industry')
+asx.symbols$ASX = paste0(asx.symbols$ASX, '.AX')
+asx.symbol = data.table(sapply(asx.symbols, function(x) as.character(x)))
+
+
+# download symbol financials
+financials = data.table(company = asx.symbols$company,
+                   industry = asx.symbols$industry,
+                   getQuote(asx.symbols$ASX, 
+                            what = yahooQF(c('P/E Ratio','Price/EPS Estimate Current Year'))))
+financials$`P/E Ratio` = as.numeric(financials$`P/E Ratio`)
+financials$`Price/EPS Estimate Current Year` = as.numeric(financials$`Price/EPS Estimate Current Year`)
+
+table(is.na(financials$`P/E Ratio`))
+table(is.na(financials$`Price/EPS Estimate Current Year`))
+
+# delete outliers
+financials[get('P/E Ratio') >100]
+
+g0 = ggplot(financials, aes(x = industry, y = get('P/E Ratio'))) + 
+  geom_violin()+
+  labs(y = 'With Outliers', title = 'P/E Distribution for ASX stocks')+
+  theme(axis.title.x = element_blank(), axis.text.x = element_blank())
+
+g1 = ggplot(financials[get('P/E Ratio') < 100], aes(x = industry, y = get('P/E Ratio'))) + 
+  geom_violin() +
+  theme(axis.text.x=element_text(angle=90, hjust = 1, size = 10, face="bold"),
+        axis.title.x = element_blank()) +
+  labs(y = 'Without Outliers')
+
+grid.newpage()
+grid.draw(rbind(ggplotGrob(g0), ggplotGrob(g1), size = "last"))
+```
+
+## Download Financial Data
+```{r}
+# NOT WORKING
+
+# #install.packages('quantmod')
+# library(quantmod)
+# n = 'ASX:BAL'
+# fin = getFin(n,auto.assign = F) # cant find as not filed at US
+# 
+# #install.packages('tidyquant',repo = 'https://cran.csiro.au/')
+# library(tidyquant)
+# a = tq_get('XASX:BAL',get  = "key.ratios") # cant find as truncated to XASXBAL
+# a$data[[1]]
+
+url <- 'http://www.asx.com.au/asx/research/ASXListedCompanies.csv'
+asx.symbols <- data.table(read.csv(url, skip = 2))
+stocks <- asx.symbols[GICS.industry.group =='Food, Beverage & Tobacco']$ASX.code
+stocks = paste0('XASX:', stocks)
+
+# download from morningstar.com
+
+lst_raw <- lapply(stocks, function(x){
+  url = paste0("http://financials.morningstar.com/ajax/exportKR2CSV.html?&t=", x)
+  tryCatch(
+        data.table(read.csv(url, header = T, stringsAsFactors = FALSE, skip = 2)),
+        error=function(e){cat('Error in loading: ', x, '\n')}
+        )
+})# TGH(43), TB8(46)
+
+# delete null/failed retreivals
+names(lst_raw) = stocks
+nulls = which(sapply(lst_raw, is.null) ==T)
+lst_raw[nulls] = NULL
+lst_raw[[17]]
+length(lst_raw)
+```
+
+## make col and row names right
+```{r}
+lst = lapply(1:length(lst_raw), function(i){
+    asx = names(lst_raw)[i]
+    symbol_raw = lst_raw[[i]]
+    attr = symbol_raw$X
+    # get the right year label 
+    Fyear = sapply(colnames(symbol_raw)[-1], function(col){if (col == 'TTM'){col} else {substr(col,2,5)}})
+    symbol = t(symbol_raw)[-1,]
+    symbol = data.table(suppressWarnings(apply(symbol,MARGIN = 2,as.numeric)))
+    colnames(symbol) = attr
+    # add a new column called year
+    symbol[, year := Fyear]
+    symbol[, symbol := asx]
+    return (symbol)
+})
+dim(lst[[1]])
+length(lst)
+lst[[12]]
+# all symbol have 101 rows, 11 columns?
+sum(unlist(sapply(lst, function(x)dim(x)[2]==103)))
+sum(unlist(sapply(lst, function(x)dim(x)[1]==11)))
+
+
+```
+# change some column names such as 'year on year'
+```{r}
+for (i in 1:52){
+  colnames(lst[[i]]) = gsub('NZD', 'AUD', colnames(lst[[i]]))
+  colnames(lst[[i]])[39] = "RevenueGrowth%1"
+  colnames(lst[[i]])[40] = "RevenueGrowth%3"
+  colnames(lst[[i]])[41] = "RevenueGrowth%5"
+  colnames(lst[[i]])[42] = "RevenueGrowth%10"
+  colnames(lst[[i]])[44] = "OpIncomeGrowth%1"
+  colnames(lst[[i]])[45] = "OpIncomeGrowth%3"
+  colnames(lst[[i]])[46] = "OpIncomeGrowth%5"
+  colnames(lst[[i]])[47] = "OpIncomeGrowth%10"
+  colnames(lst[[i]])[49] = "NtIncomeGrowth%1"
+  colnames(lst[[i]])[50] = "NtIncomeGrowth%3"
+  colnames(lst[[i]])[51] = "NtIncomeGrowth%5"
+  colnames(lst[[i]])[52] = "NtIncomeGrowth%10"
+  colnames(lst[[i]])[54] = "EPSGrowth%1"
+  colnames(lst[[i]])[55] = "EPSGrowth%3"
+  colnames(lst[[i]])[56] = "EPSGrowth%5"
+  colnames(lst[[i]])[57] = "EPSGrowth%10"
+}
+lst[[1]]
+
+```
+
+### see which attributes have the most data
+```{r}
+attr_count = list()
+N = length(lst)
+r = dim(lst[[1]])[1]
+c = dim(lst[[1]])[2] - 2 # not including the last column year, symbol
+for (n in 1:N){
+  symbol = lst[[n]]
+  for (i in 1:r){ #row index
+    rname = symbol[i,year]
+    for (j in 1:c){ 
+      cname = colnames(symbol)[j]
+      index = paste0(cname, '_',rname)
+      if (is.null(attr_count[[index]]) == T){
+        attr_count[[index]] = 0
+      } 
+      if (is.na(symbol[i,cname, with = F]) ==F){ #importatnt to set with =F to indicate index reference
+          attr_count[[index]] = attr_count[[index]] + 1
+      } 
+    }
+  }
+}
+
+count = t(data.frame(attr_count))
+count = data.table(var = rownames(count), n=count[,1])
+setorder(count, -n)
+
+write.csv(count, 'count.csv',row.names = F)
+
+```
+
+## look at attributes and choose
+```{r}
+sort(colnames(lst[[1]]))
+```
+## Select interested attributes to cluster - write a method
+```{r}
+# Say we are interested in EPS in 2016, EPS growth in 2016, Divident Payout Ratio in 2016, current ratio in 2016
+
+# first combine into a big table
+# SM1 has different column in NZD, thus creating more columns, that's ok -no more!
+food = melt.data.table(rbindlist(lst,use.names = T, fill = T), id.vars = c('symbol','year'))
+
+# then filter the table to find the right ones
+attr = c('Earnings Per Share AUD','Book Value Per Share * AUD','Free Cash Flow Per Share * AUD',
+          'EPSGrowth%1', "Current Ratio",'Payout Ratio % *')
+filtered = food[year == '2016'] [variable %in% attr]
+cast = dcast.data.table(filtered, symbol+year ~variable)
+cast = cast[rowSums(is.na(cast[,attr[which(attr !='Payout Ratio % *')], with = F])) == 0]
+asxSymbol = substr(cast$symbol,6,8)
+cast[,symbol:= asxSymbol]
+
+```
+
+## get stock price
+```{r}
+#devtools::install_github("joshuaulrich/quantmod", ref="157_yahoo_502")
+library(quantmod)
+symbols = paste0(cast$symbol,'.AX')
+getSymbols(symbols, from = as.Date('2016-06-30'))
+# merge close price and collpase by weeks/months
+ClosePrices = do.call(merge, lapply(symbols, function(x) Cl(get(x)[!duplicated(index(get(x)))])))
+data.table(ClosePrices)
+```
+
+## calculate PE, PB, PCF, impute 0 to payout ratio
+```{r}
+initialPrice = as.vector((ClosePrices)[1])
+cast[,PE := initialPrice / cast$'Earnings Per Share AUD']
+cast[,PB := initialPrice / cast$'Book Value Per Share * AUD']
+cast[,PCF := initialPrice / cast$'Free Cash Flow Per Share * AUD']
+
+library(gdata)
+cast = NAToUnknown(cast,0)
+```
+
+
+## clustering - write a method
+```{r}
+use = data.frame(cast[,c(4,7:11), with = F]) # trun to data frame for rownames
+rownames(use) = symbols
+use
+
+# hierachical clustering
+use_scaled = scale(use)
+ddg = hclust(dist(use_scaled),method = 'complete')
+plot(ddg)
+
+```
+
+## Parellel coordinate
+```{r}
+# parellel coordinate
+#install.packages('GGally')
+library(GGally)
+library(ggplot2)
+colnames(cast)
+cluster = as.factor(cutree(ddg, 4))
+cast$cluster = cluster
+ggparcoord(cast[,c('symbol','Payout Ratio % *',"EPSGrowth%1","Current Ratio","PE","PB","PCF",'cluster'),with=F], 
+           columns = c(2:7),
+           groupColumn = 8,scale = 'center', showPoints = T,  alphaLines = 0.4,
+           mapping = aes(size = 1.5, label =rep(symbols,6)))+
+   ggplot2::scale_size_identity()+
+  theme(text = element_text(size=15), axis.text.x = element_text(angle=45, hjust=1)) +
+  geom_label(size =2)
+
+
+# may want to update this graph to include symbols
+```
+##PCA
+```{r}
+
+pca = prcomp(use_scaled,scale=F)
+biplot(pca, scale=0)
+pca_data = cbind(data.frame(pca$x[,1:2]),cluster)
+ggplot(pca_data,aes(x=PC1, y=PC2, color = cluster, label = rownames(pca_data))) +
+  geom_point() + 
+  geom_label(aes(fill = cluster), colour = "white", fontface = "bold",size =3)
+```
+## kmeans
+```{r}
+km = kmeans(use_scaled,4)
+plot(use_scaled,col = km$cluster)
+```
+
+```{r}
+#######################
+# calculate moving average of price
+#######################
+Fscale_ma = function(xts,ma){
+  date = index(xts)
+  dt = data.table(xts)
+  f4 = rep(1/ma,ma)
+  dt = apply(dt, 2, function(x){
+    filter(x, f4, side = 1)
+  })
+  return(xts(dt, order.by = as.Date(date)))
+}
+######################
+# scale each column
+#######################
+Fscale = function(xts){
+  date = index(xts)
+  dt = data.table(xts)
+  dt = apply(dt, 2, function(x){
+    (x-mean(x, na.rm = T))/sd(x, na.rm = T)
+  })
+  return(xts(dt, order.by = as.Date(date)))
+}
+
+# Fscale_ma(Fscale((ClosePrices)),20)
+# prices =Fscale_ma(ClosePrices,20)
+# logprices = diff(log(as.xts(prices)))
+# similarity = apply(logprices, MARGIN = 1, function(x){         # can be improved by apply.daily
+#       max(sum(sign(x)>=0), length(x)-sum(sign(x)>=0)) / length(x)
+#     })
+#     prices$similar
+#-----------
+# FUNCTION trend
+# use: 
+#0. merge symbol with clusterID
+#1. normalize stock price by group 
+#2. determine group trend 
+#----------------------
+# normalize close price
+
+Ftrend = function(DT_closeprice, DT_cluster){
+  #nm_price = Fscale_ma(DT_closeprice, ma = 40) #two months MA
+  nm_price = Fscale_ma(DT_closeprice, ma = 40)
+  colnames(nm_price) = substr(colnames(nm_price),start = 0, stop=3)
+  tomelt = melt(cbind(date = index(nm_price),data.table(nm_price)),'date') # long format
+  merged = merge(x=tomelt,y = DT_cluster[,.(symbol, cluster)], by.x = 'variable', by.y = 'symbol')
+
+  clusters = list()
+  for (cl in levels(DT_cluster$cluster)){
+    clustered = merged[cluster==cl,]
+    prices = dcast.data.table(clustered, date ~variable)
+    return = diff(log(as.xts(prices)))
+    similarity = apply(return, MARGIN = 1, function(x){         # can be improved by apply.daily
+      max(sum(sign(x)>=0), length(x)-sum(sign(x)>=0)) / length(x)
+    })
+    #return$similarity = similarity
+    return = cbind(as.data.table(return),similarity = NAToUnknown(similarity,0)) # show graph by log return
+    # prices$similarity = NAToUnknown(similarity,0)  # show graph by actural price
+    clusters[[cl]] = return
+  }
+  return(clusters)
+}
+c3 = Ftrend(ClosePrices,cast)[[3]]
+
+c3_m = melt(c3[,-ncol(c3), with =F],id.vars = 'index')
+# ggplot(m, aes(x=date, y = value, color = variable))+
+#   geom_line(size =1.3, alpha =0.6)+
+#   geom_point(size = 0.5)+
+#   facet_grid(cluster~.)+
+#   stat_summary(aes(group=cluster), fun.y=mean, geom="line",color = 'black',size=3, alpha=0.15)
+
+
+ggplot(c3_m, aes(x=index, y = value, color = variable))+
+  geom_line(size =1.3, alpha =0.6)+
+  geom_vline(xintercept = as.numeric(c3$index), color = 'darkgreen', size =1,
+             alpha = qunif(punif(c3$similarity, 0.5, 1),min=0,max=0.8))
+# +
+#   geom_vline(xintercept = as.numeric(c3$date), color = 'red', size =1.3,alpha = 1- qunif(c3$similarity,min = 0,max=0.8))
+```
+
+
+## plot cluster
+```{r}
+
+
+transform = function(cl,cast){
+  trans = cl
+  coln = substr(colnames(trans),start = 0, stop=3)
+  timestamp = index(trans)
+  colnames(trans) = coln
+  trans = melt(cbind(date = timestamp,data.table(trans)),'date')
+  trans = merge(x=trans,y = cast[,.(symbol, cluster)], by.x = 'variable', by.y = 'symbol', all.x = T)
+}
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
